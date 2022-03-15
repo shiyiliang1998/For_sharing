@@ -1,0 +1,248 @@
+---
+title: "hw07"
+author: "shiyi"
+date: "2/27/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(tidyverse)
+library(tidymodels)
+library(rcfss)
+
+
+
+```
+
+
+# This is part one, Student debt
+
+
+```{r spiltdata}
+set.seed(100)
+
+data("scorecard") 
+scorecard <- scorecard %>%
+  select(-all_of(c("unitid","name"))) %>%
+  modify_if(is.character, as.factor)
+
+#spilt it
+score_spilt <- initial_split(scorecard, prop = 3/4)
+score_train <- training(score_spilt)
+score_test <- testing(score_spilt)
+
+```
+
+
+
+
+```{r trianmodel}
+
+
+#train model
+line_model <- linear_reg() %>%
+  set_engine("lm") %>%
+  set_mode("regression")
+
+line_model %>%
+  fit(debt ~ . - state, 
+      data = score_train) %>%
+  predict(new_data = score_test) %>%
+  mutate(truescore = score_test$debt) %>%
+# report RMSE as required
+  rmse( truth = truescore, estimate = .pred)
+
+```
+## linear regression
+Root-mean_square deviation means deviation of the estimation of the model
+RMSE for the  model is 3108.3261071
+
+
+```{r fold10}
+
+fold10 <- vfold_cv(score_train , v = 10, strata = debt)
+
+line_model %>%
+  fit_resamples(debt ~ . - state, resamples = fold10) %>%
+  collect_metrics()
+
+```
+
+## cross-valid
+RMSE for the ten-fold cross-validated model is 3108.3261071
+
+```{r fold}
+
+fold10 <- vfold_cv(score_train, v = 10, strata = debt)
+
+line_model %>%
+  fit_resamples(debt ~ . - state, resamples = fold10) %>%
+  collect_metrics()
+
+```
+
+```{r decision_treee}
+treemodel <- decision_tree() %>%
+  set_engine( engine = "rpart") %>%
+  set_mode (mode = "regression")
+
+treemodel %>%
+ fit_resamples(debt ~ . - state, resample = fold10)%>%
+  collect_metrics()
+
+
+```
+## Tree model
+RMSE for the tree model ten-fold cross-validated model is 3108.3261071
+
+# Part 2 Predicting attitudes towards racist college professors
+
+``` {r data2}
+
+data("gss", package = "rcfss")
+data("gss", package = "rcfss")
+final_data <- gss %>%
+  select(-all_of(c("id","wtss")))  
+
+```
+
+``` {r spilt}
+set.seed(100)
+
+gss_split <- initial_split(gss, strata = colrac, prop = 3/4)
+gss_train <- training(gss_split)
+gss_test <- testing(gss_split)
+
+
+```
+
+
+``` {r  logistic_regression_model}
+
+#logistic regression model
+lrmod <- logistic_reg(mode = "classification") %>% 
+  set_engine(engine = "glm") 
+# cross validation
+gss_folds <- vfold_cv(data = gss_train, v = 10, strata = colrac)
+# train it
+lrmod %>%
+  fit_resamples(colrac ~ age + black + degree + partyid_3 + sex + south, resamples = gss_folds) %>% 
+  collect_metrics()
+
+```
+
+##accuracy
+accuracy of the model is 0.5291205, roc_auc is 0.5475663		.
+
+
+```{r forest}
+
+
+# cross validation
+gss_folds <- vfold_cv(gss_train, v = 10, strata = colrac)
+
+forest_mod <- rand_forest(
+  mode = "classification",
+  engine = "ranger"
+)
+
+#recipe
+gss_rec <- recipe(colrac ~ ., data = gss_train) %>%
+        update_role(id, wtss, new_role = "ID") %>%
+        step_naomit(colrac, skip = TRUE) %>%
+        step_impute_median(all_numeric_predictors()) %>%
+        step_impute_mode(all_nominal_predictors()) 
+
+# workflow
+workflow() %>%
+  add_recipe(gss_rec) %>%
+  add_model(forest_mod) %>%
+  fit_resamples(resamples = gss_folds) %>% 
+  collect_metrics()
+
+
+```
+
+##accuracy for  forest model 
+accuracy of the model is 0.8066150, for roc_auc is 0.8851214
+
+```{r neigh }
+
+
+knn_mod <- nearest_neighbor(neighbors = 5) %>%              
+  set_engine("kknn") %>%             
+  set_mode("classification")
+
+gss_rec_nei <- recipe(colrac ~ ., data = gss_train) %>%
+  update_role(id, wtss, new_role = "ID") %>% 
+  step_naomit(colrac, skip = TRUE) %>% 
+  step_medianimpute(all_numeric()) %>%
+  step_modeimpute(all_nominal(), -all_outcomes()) %>% 
+  step_normalize(all_numeric()) 
+
+gss_wf_nei <- workflow() %>% 
+  add_recipe(gss_rec_nei) %>% 
+  add_model(knn_mod) 
+
+
+gss_wf_nei %>%
+  fit_resamples(resamples = gss_folds) %>% 
+  collect_metrics()
+
+
+```
+##accuracy for  five-nearest neighbors model
+accuracy for  five-nearest neighbors model is accuracy for  five-nearest neighbors model,
+roc_auc is 0.7992496
+
+``` {r ridge logistic regression model }
+
+ridge_mod <- logistic_reg(mode = "classification",
+                          penalty = .01,
+                          mixture = 0) %>% 
+  set_engine(engine = "glm")
+
+#workflow, tired of naming it
+gss_wf3 <- workflow() %>% 
+  
+#just use previous one
+  add_recipe(gss_rec_nei) %>% 
+  add_model(ridge_mod) 
+
+# training the model
+gss_wf3 %>%
+  fit_resamples(resamples = gss_folds) %>% 
+  collect_metrics()
+
+
+```
+
+## ridge model
+
+ridge logistic regression model, accuracy is accuracy, roc_auc is 0.8558371
+
+```{r best}
+
+rec_best <- recipe(colrac ~ ., data = gss_test) %>%
+  update_role(id, wtss, new_role = "ID") %>%
+  step_naomit(colrac, skip = TRUE) %>% 
+  step_impute_median(all_numeric()) %>% 
+  step_impute_mode(all_nominal(), -all_outcomes()) %>% 
+  step_dummy(all_nominal(), -all_outcomes())
+
+workflow() %>%
+  add_recipe(rec_best) %>%
+  add_model(forest_mod) %>%
+  fit(data = gss_train) %>%
+  predict(new_data = gss_test) %>%
+  mutate(true_racist = gss_test$colrac) %>%
+  accuracy(truth = true_racist, estimate = .pred_class)
+
+```
+
+## final
+
+accuracy is 0.7943925
+
+
